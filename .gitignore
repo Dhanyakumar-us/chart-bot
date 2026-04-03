@@ -1,0 +1,12 @@
+# Frontend
+node_modules/
+dist/
+
+# Backend
+venv/
+__pycache__/
+chat_history.db
+.env
+
+# OS Files
+.DS_Store

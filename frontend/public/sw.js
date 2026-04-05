@@ -1,70 +1,73 @@
-const CACHE_NAME = 'nolimits-ai-v1';
-const urlsToCache = [
+/* ============================================================
+   NoLimits AI – Service Worker  (PWA / Offline Support)
+   ============================================================ */
+
+const CACHE_VERSION = 'v2';
+const CACHE_NAME    = `nolimits-ai-${CACHE_VERSION}`;
+
+// App-shell assets to pre-cache on install
+const PRECACHE_URLS = [
   '/',
   '/index.html',
-  '/manifest.json'
+  '/manifest.json',
 ];
 
-// Install event - cache core assets
+// ── Install: pre-cache shell ──────────────────────────────────
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log('Opened cache');
-      return cache.addAll(urlsToCache);
-    })
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))
   );
-  self.skipWaiting();
+  self.skipWaiting(); // Activate immediately
 });
 
-// Activate event - clean up old caches
+// ── Activate: clean up old caches ────────────────────────────
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            console.log('Deleting old cache:', cacheName);
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    })
+    caches.keys().then((keys) =>
+      Promise.all(
+        keys
+          .filter((key) => key !== CACHE_NAME)
+          .map((key) => caches.delete(key))
+      )
+    )
   );
-  self.clients.claim();
+  self.clients.claim(); // Take control of all open tabs
 });
 
-// Fetch event - network first, fallback to cache
+// ── Fetch: Network-first, fall back to cache ─────────────────
 self.addEventListener('fetch', (event) => {
-  // Skip non-GET requests and Chrome extensions
-  if (event.request.method !== 'GET' || event.request.url.startsWith('chrome-extension')) {
+  const { request } = event;
+
+  // Only handle GET requests from our own origin
+  if (
+    request.method !== 'GET' ||
+    !request.url.startsWith(self.location.origin)
+  ) {
     return;
   }
 
-  // For API calls, use network only
-  if (event.request.url.includes('/api/') || event.request.url.includes('render.com') || event.request.url.includes('groq')) {
-    return;
-  }
+  // Skip API calls — always go to network
+  if (request.url.includes('/api/')) return;
 
   event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        // Clone the response
-        const responseClone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseClone);
-        });
-        return response;
+    fetch(request)
+      .then((networkResponse) => {
+        // Cache a clone of every successful navigation/asset response
+        if (networkResponse && networkResponse.status === 200) {
+          const clone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+        }
+        return networkResponse;
       })
-      .catch(() => {
-        return caches.match(event.request).then((cachedResponse) => {
-          if (cachedResponse) {
-            return cachedResponse;
-          }
-          // Return offline page for navigation requests
-          if (event.request.mode === 'navigate') {
-            return caches.match('/index.html');
-          }
-        });
-      })
+      .catch(() =>
+        // Network failed → serve from cache; fall back to index.html for navigation
+        caches.match(request).then(
+          (cachedResponse) =>
+            cachedResponse ||
+            (request.mode === 'navigate'
+              ? caches.match('/index.html')
+              : new Response('Offline', { status: 503 }))
+        )
+      )
   );
 });
